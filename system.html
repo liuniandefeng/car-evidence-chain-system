@@ -1141,6 +1141,18 @@ tbody tr:hover { background: var(--gray-50); }
   padding: 0;
   display: flex;
 }
+.upload-file-tag .file-view {
+  color: var(--brand-600);
+  font-weight: 600;
+  text-decoration: underline;
+}
+.upload-file-tag .file-view:hover { color: var(--brand-700); }
+.upload-file-tag .file-remove {
+  color: var(--red-500);
+  font-size: 14px;
+  line-height: 1;
+}
+.upload-file-tag .file-remove:hover { color: var(--red-700); }
 
 /* ============================================================
    Toast
@@ -1741,10 +1753,6 @@ tbody tr:hover { background: var(--gray-50); }
         <div class="card-header">
           <span class="card-title">产品列表</span>
           <div style="display:flex;gap:var(--sp-3);">
-            <button class="btn btn-secondary" onclick="downloadProductTemplate()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              下载导入模板
-            </button>
             <button class="btn btn-secondary" onclick="openProductImportModal()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               批量导入
@@ -1766,7 +1774,7 @@ tbody tr:hover { background: var(--gray-50); }
             <table>
               <thead>
                 <tr>
-                  <th>产品类型</th><th>产品名称</th><th>售价（元）</th><th>权重</th><th>创建时间</th><th>操作</th>
+                  <th>产品类型</th><th>产品名称</th><th>售价（元）</th><th>权重</th><th>库存</th><th>创建时间</th><th>操作</th>
                 </tr>
               </thead>
               <tbody id="product-table-body"></tbody>
@@ -1959,11 +1967,12 @@ tbody tr:hover { background: var(--gray-50); }
 
         <!-- Attachment section (服务费 & 推广费 均可上传其他附件资料) -->
         <div class="form-section-title" id="inv-promo-title" style="display:none;">发票附件 / 其他资料上传</div>
-        <div class="upload-zone" id="inv-upload-zone" style="display:none;" onclick="simulateFileUpload('inv')">
+        <div class="upload-zone" id="inv-upload-zone" style="display:none;" onclick="document.getElementById('inv-file-input').click()" ondragover="event.preventDefault();this.style.borderColor='var(--brand-500)';this.style.background='var(--brand-50)';" ondragleave="this.style.borderColor='';this.style.background='';" ondrop="event.preventDefault();this.style.borderColor='';this.style.background='';handleInvoiceFileDrop(event)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           <div>点击或拖拽上传发票相关附件 / 其他资料</div>
-          <div style="font-size:11px;margin-top:4px;">支持 PDF、Word、图片格式</div>
+          <div style="font-size:11px;margin-top:4px;">支持 PDF、Word、图片等格式（单个文件 ≤ 5MB）</div>
         </div>
+        <input type="file" id="inv-file-input" multiple style="display:none;" onchange="handleInvoiceFileUpload(this.files);this.value='';">
         <div class="form-group full" id="inv-files-display" style="display:none;">
           <label>已上传文件</label>
           <div class="upload-files" id="inv-uploaded-files"></div>
@@ -2028,6 +2037,11 @@ tbody tr:hover { background: var(--gray-50); }
           <label>权重 *</label>
           <input type="number" id="prod-weight" placeholder="正整数" step="1" min="1" required>
           <span class="form-hint">权重越大，订单生成时分配金额越多</span>
+        </div>
+        <div class="form-group">
+          <label>库存（选填）</label>
+          <input type="number" id="prod-stock" placeholder="实际库存" step="1" min="0">
+          <span class="form-hint">不填表示库存无限；填写正整数表示实际库存数量</span>
         </div>
         <div style="grid-column:1/-1;display:flex;gap:var(--sp-3);justify-content:flex-end;padding-top:var(--sp-4);">
           <button type="button" class="btn btn-secondary" onclick="closeModal('product')">取消</button>
@@ -2339,6 +2353,15 @@ function generateOrdersFromTemplate(invoice) {
   // Remove existing orders for this invoice
   store.orders = store.orders.filter(o => o.invoiceId !== invoice.id);
 
+  // 还原上次生成时扣减的产品库存（保证重新生成订单时库存扣减是幂等的，不会重复扣减）
+  if (invoice.stockConsumed && typeof invoice.stockConsumed === 'object') {
+    for (const [pid, qty] of Object.entries(invoice.stockConsumed)) {
+      const sp = store.products.find(p => p.id === pid);
+      if (sp && sp.stock != null) sp.stock += qty; // 仅当仍为有限库存时才加回
+    }
+    invoice.stockConsumed = {};
+  }
+
   // 发票级"订单状态"（发票列表中的"订单状态"列）：默认待完成，成功生成订单后置为已完成
   invoice.orderStatus = '待完成';
 
@@ -2400,55 +2423,141 @@ function generateOrdersFromTemplate(invoice) {
   }
 
   // Path B: 无上传清单 → 按产品库生成订单
-  // 规则：每个订单金额 = 产品库售价（与"产品管理"完全一致）；各产品订单数量按权重（weight，默认 1）占比分配；
-  //       以产品售价整数化后，总额尽量贴近发票"订单金额"（差异控制在最小售价以内，"贴合即可"）
-  const products = (store.products || [])
-    .filter(p => p.price > 0)
-    .map(p => ({ price: p.price, type: p.type, name: p.name, weight: p.weight > 0 ? p.weight : 1, count: 0 }));
+  // 库存规则（v3.1）：
+  //  - 产品按"有无实际库存"分两组：stockProducts（stock>0，受库存上限约束）/ infProducts（无库存=无限，不受限）
+  //  - 70% 订单金额优先由 stockProducts 生成（每产品最多 stock 笔，消耗实际库存）
+  //  - 30% 订单金额由 infProducts 生成（无限，不受限）
+  //  - 若 stockProducts 的库存被取完仍未凑满 70%，差额全部由 infProducts 补齐（"实际库存取完则全部取无限库存"）
+  //  - 若 stockProducts 为空 → 全部由 infProducts 生成；若连 infProducts 也为空 → 整体用全部产品生成
+  const allProducts = (store.products || []).filter(p => p.price > 0);
   const target = invoice.orderAmount || 0;
-  if (products.length > 0 && target > 0) {
-    const totalWeight = products.reduce((s, p) => s + p.weight, 0);
-    // 1) 理想订单数（小数）= 该产品按权重应分摊的金额 ÷ 售价；先向下取整
-    products.forEach(p => {
-      const ideal = (target * p.weight / totalWeight) / p.price;
-      p.count = Math.max(0, Math.floor(ideal));
+
+  // 通用分配：在给定产品池中，让生成订单总额尽量贴近 targetAmount；limited 产品受 stock 上限约束
+  function allocate(targetAmount, pool) {
+    const items = pool.map(p => ({
+      price: p.price, type: p.type, name: p.name,
+      weight: (p.weight > 0 ? p.weight : 1),
+      limited: (p.stock != null && p.stock > 0),
+      cap: (p.stock != null && p.stock > 0) ? p.stock : Infinity,
+      used: 0,
+      src: p, // 引用 store.products 中的真实产品对象，用于生成后扣减实际库存
+    }));
+    const totalWeight = items.reduce((s, p) => s + p.weight, 0) || 1;
+    // 1) 理想数量按权重分摊，向下取整，并受库存上限约束
+    items.forEach(p => {
+      let ideal = Math.floor((targetAmount * p.weight / totalWeight) / p.price);
+      ideal = Math.max(0, Math.min(ideal, p.cap === Infinity ? ideal : p.cap));
+      p.used = ideal;
     });
-    let sum = products.reduce((s, p) => s + p.count * p.price, 0);
-    let remain = target - sum; // >= 0
-    // 2) 在预算内逐个补单位：优先补"价格最接近剩余金额"的产品，使总额尽量贴近订单金额
+    let sum = items.reduce((s, p) => s + p.used * p.price, 0);
+    let remain = targetAmount - sum;
+    // 2) 逐个补单位：优先补"使总额最接近目标"的产品，且不得超过其库存上限
     let guard = 0;
-    while (remain > 0 && guard < 10000) {
+    while (remain > 0 && guard < 20000) {
       let best = null, bestErr = Infinity;
-      for (const p of products) {
-        const err = Math.abs(sum + p.price - target);
+      for (const p of items) {
+        if (p.limited && p.used >= p.cap) continue;
+        const err = Math.abs(sum + p.price - targetAmount);
         if (err < bestErr) { bestErr = err; best = p; }
       }
       if (!best) break;
-      if (sum + best.price > target && bestErr > remain) break; // 补了反而更远，停止
-      best.count++;
+      if (sum + best.price > targetAmount && bestErr > remain) break; // 补了反而更远，停止
+      best.used++;
       sum += best.price;
-      remain = target - sum;
+      remain = targetAmount - sum;
       guard++;
     }
-    let made = 0;
-    products.forEach(p => {
-      for (let i = 0; i < p.count; i++) {
-        pushOrder(p.price, p.type, p.name); // 订单金额严格 = 产品库售价
-        made++;
+    return { items, sum };
+  }
+
+  // 最终对账：调整各产品生成数量，使"生成订单总额"尽量等于发票订单金额
+  // 整数金额争取精确匹配；订单金额带小数无法精确时，允许 ≤ 最小单价的偏差
+  function reconcile(items, target) {
+    let total = items.reduce((s, p) => s + p.used * p.price, 0);
+    let guard = 0;
+    while (guard < 50000) {
+      const gap = target - total;
+      if (Math.abs(gap) < 1e-9) break;
+      if (gap > 0) {
+        // 需要增加：挑选"加上后总额最接近目标"且仍有余量（未超库存上限）的产品
+        let best = null, bestErr = Infinity;
+        for (const p of items) {
+          if (p.used >= p.cap) continue; // 受库存上限约束的产品已满
+          const err = Math.abs(total + p.price - target);
+          if (err < bestErr) { bestErr = err; best = p; }
+        }
+        if (!best) break; // 无法再增加（均已达上限）→ 接受偏差
+        best.used++;
+        total += best.price;
+      } else {
+        // 需要减少：挑选"减去后总额最接近目标"的产品
+        let best = null, bestErr = Infinity;
+        for (const p of items) {
+          if (p.used <= 0) continue;
+          const err = Math.abs(total - p.price - target);
+          if (err < bestErr) { bestErr = err; best = p; }
+        }
+        if (!best) break;
+        best.used--;
+        total -= best.price;
       }
-    });
+      guard++;
+    }
+  }
+
+  if (allProducts.length > 0 && target > 0) {
+    const stockProducts = allProducts.filter(p => p.stock != null && p.stock > 0);
+    const infProducts = allProducts.filter(p => !(p.stock != null && p.stock > 0));
+
+    // 先按"有无库存"分池分配，得到初步 item 集合（暂不生成订单）
+    let phaseItems = [];
+    if (stockProducts.length > 0 && infProducts.length > 0) {
+      // 两类都有：70% 订单金额优先由有实际库存产品承担（受库存上限约束），30% + 差额由无限库存产品承担
+      const r1 = allocate(target * 0.7, stockProducts);
+      phaseItems.push(...r1.items);
+      const deficit = Math.max(0, target * 0.7 - r1.sum); // 库存用完后仍缺的金额
+      const r2 = allocate(target * 0.3 + deficit, infProducts);
+      phaseItems.push(...r2.items);
+    } else if (stockProducts.length > 0) {
+      // 仅有库存产品（无无限库存）→ 全部由其承担，受库存上限约束（库存不足则贴近）
+      const r = allocate(target, stockProducts);
+      phaseItems.push(...r.items);
+    } else {
+      // 仅无限库存产品
+      const r = allocate(target, infProducts);
+      phaseItems.push(...r.items);
+    }
+
+    // 最终对账：让生成订单总额尽量等于发票订单金额
+    // （整数金额争取精确匹配；带小数位无法精确时，允许 ≤ 最小单价的偏差）
+    reconcile(phaseItems, target);
+
+    // 生成订单并扣减实际库存
+    const consume = {};
+    let made = 0;
+    for (const it of phaseItems) {
+      for (let i = 0; i < it.used; i++) pushOrder(it.price, it.type, it.name);
+      made += it.used;
+      if (it.used > 0 && it.src && it.src.stock != null) {
+        it.src.stock -= it.used;
+        if (it.src.stock < 0) it.src.stock = 0;
+        consume[it.src.id] = (consume[it.src.id] || 0) + it.used;
+      }
+    }
+
     if (made === 0) {
-      // 极端情况（订单金额远小于任意售价）→ 至少生成 1 笔权重最大的产品
-      let best = products[0];
-      for (const p of products) if (p.weight > best.weight) best = p;
+      // 极端兜底（订单金额远小于任意售价）→ 至少生成 1 笔权重最大的产品
+      let best = allProducts[0];
+      for (const p of allProducts) if ((p.weight || 1) > (best.weight || 1)) best = p;
       pushOrder(best.price, best.type, best.name);
       made = 1;
     }
     invoice.orderStatus = '已完成'; // 按产品库成功生成订单 → 发票订单状态置为已完成
+    invoice.stockConsumed = consume; // 记录本次消耗，供重新生成时还原
   } else {
     // 产品库为空 或 订单金额为 0 → 单笔占位订单，金额取订单金额
     pushOrder(target, '未分类', '未匹配产品');
-    invoice.orderStatus = (products.length === 0) ? '待完成' : '已完成';
+    invoice.orderStatus = (allProducts.length === 0) ? '待完成' : '已完成';
   }
   store.nextIds.order = orderCounter;
 }
@@ -2576,15 +2685,7 @@ function applyInvoiceDraft(draft) {
   } else {
     document.getElementById('inv-template-preview').style.display = 'none';
   }
-  if (invTempFiles.length > 0) {
-    document.getElementById('inv-uploaded-files').innerHTML = invTempFiles.map(f =>
-      `<span class="upload-file-tag">${f}<button onclick="removeTempUploadedFile('${f}')">&times;</button></span>`
-    ).join('');
-    document.getElementById('inv-files-display').style.display = 'block';
-  } else {
-    document.getElementById('inv-uploaded-files').innerHTML = '';
-    document.getElementById('inv-files-display').style.display = 'none';
-  }
+  renderInvUploadZone();
 }
 
 /* ============================================================
@@ -2909,12 +3010,7 @@ function openInvoiceModal(invId) {
       document.getElementById('inv-date').value = inv.date;
       calcOrderAmount();
 
-      if (inv.files && inv.files.length > 0) {
-        document.getElementById('inv-uploaded-files').innerHTML = inv.files.map(f =>
-          `<span class="upload-file-tag">${f}<button onclick="removeUploadedFile('${inv.id}','${f}')">&times;</button></span>`
-        ).join('');
-        document.getElementById('inv-files-display').style.display = 'block';
-      }
+      renderInvSavedFiles(inv);
 
       // Load existing template data for editing
       const previewEl = document.getElementById('inv-template-preview');
@@ -2930,15 +3026,7 @@ function openInvoiceModal(invId) {
       }
 
       // 按当前发票重置附件展示区，避免上一张发票的文件残留显示（数据串通）
-      if (inv.files && inv.files.length > 0) {
-        document.getElementById('inv-uploaded-files').innerHTML = inv.files.map(f =>
-          `<span class="upload-file-tag">${f}<button onclick="removeUploadedFile('${inv.id}','${f}')">&times;</button></span>`
-        ).join('');
-        document.getElementById('inv-files-display').style.display = 'block';
-      } else {
-        document.getElementById('inv-uploaded-files').innerHTML = '';
-        document.getElementById('inv-files-display').style.display = 'none';
-      }
+      renderInvSavedFiles(inv);
       // Load date values（结算时间兼容旧数据的 settleStart）
       document.getElementById('inv-settle-date').value = inv.settleDate || inv.settleStart || '';
       document.getElementById('inv-service-start').value = inv.serviceStart || '';
@@ -3248,6 +3336,11 @@ function saveInvoice(e) {
   const listToleranceOk = orderAmount <= 0 || templateTotal <= 0
     || Math.abs(templateTotal - orderAmount) <= orderAmount * 0.01;
 
+  // 附件：编辑时保留原附件，并合并本次新增的附件（均为仅含元数据的对象）
+  const origInv = editId ? (store.invoices.find(i => i.id === editId)) : null;
+  const origFiles = origInv ? (origInv.files || []) : [];
+  const allFiles = origFiles.concat(invTempFiles.slice());
+
   const invoice = {
     id,
     entity: document.getElementById('inv-entity').value,
@@ -3259,10 +3352,10 @@ function saveInvoice(e) {
     orderAmount,
     project,
     date: document.getElementById('inv-date').value,
-    files: editId
-      ? (store.invoices.find(i => i.id === editId)?.files || [])
-      : invTempFiles.slice(),
+    files: allFiles,
     templateData: internalType === '服务费' ? invTemplateData : [],
+    // 编辑时保留原库存消耗记录，供 generateOrdersFromTemplate 还原（避免重新生成时重复扣减）
+    stockConsumed: origInv ? (origInv.stockConsumed || {}) : {},
     settleDate: internalType === '服务费' ? settleDate : '',
     serviceStart: internalType === '服务费' ? serviceStart : '',
     serviceEnd: internalType === '服务费' ? serviceEnd : '',
@@ -3270,14 +3363,13 @@ function saveInvoice(e) {
     redactStatus: document.getElementById('inv-redact').value,
     // 订单状态：服务费发票有清单且容差达标→已完成；推广费发票有上传附件→已完成；其余为待完成
     orderStatus: (internalType === '服务费' && invTemplateData.length > 0 && listToleranceOk) ? '已完成'
-      : (internalType === '推广费' && ((editId ? (store.invoices.find(i => i.id === editId)?.files || []) : invTempFiles).length > 0)) ? '已完成'
+      : (internalType === '推广费' && allFiles.length > 0) ? '已完成'
       : '待完成',
   };
 
   if (editId) {
     const idx = store.invoices.findIndex(i => i.id === editId);
     if (idx >= 0) {
-      invoice.files = store.invoices[idx].files;
       store.invoices[idx] = invoice;
     }
   } else {
@@ -3295,6 +3387,7 @@ function saveInvoice(e) {
   closeModal('invoice');
   renderInvoiceTable();
   renderOrderTable();
+  renderProductTable(); // 刷新产品库，展示被订单消耗的库存变化
 
   refreshDashboard();
   showToast(editId ? '发票已更新' : '发票已创建', 'success');
@@ -3354,7 +3447,7 @@ function viewInvoiceDetail(id) {
   }
 
   const filesHtml = inv.files && inv.files.length > 0
-    ? inv.files.map(f => `<span class="product-chip">${f}</span>`).join('')
+    ? invFilesChipsHtml(inv.files)
     : '无';
 
   // Build template data table HTML for service fee invoices
@@ -3413,64 +3506,161 @@ function viewInvoiceDetail(id) {
   openModal('invoice-detail');
 }
 
-function removeUploadedFile(invId, fileName) {
-  const inv = store.invoices.find(i => i.id === invId);
-  if (inv) {
-    inv.files = inv.files.filter(f => f !== fileName);
-    // 移除全部附件且无关联订单时，订单状态回退为"待完成"（推广费/服务费一致）
-    const hasOrders = store.orders.some(o => o.invoiceId === invId);
-    if (inv.files.length === 0 && !hasOrders) inv.orderStatus = '待完成';
-    saveStore();
-    document.getElementById('inv-uploaded-files').innerHTML = inv.files.map(f =>
-      `<span class="upload-file-tag">${f}<button onclick="removeUploadedFile('${invId}','${f}')">&times;</button></span>`
-    ).join('');
-    if (inv.files.length === 0) document.getElementById('inv-files-display').style.display = 'none';
-    renderInvoiceTable();
-    refreshDashboard();
+/* ============================================================
+   发票附件：真实上传 + 查看（替换原 simulateFileUpload 模拟上传）
+   - 文件以 base64 存于独立 localStorage 键 INV_FILES_KEY（避免撑爆主数据）
+   - 发票记录仅保存元数据 {id,name,type,size}，查看时按 id 取回内容
+   ============================================================ */
+const INV_FILES_KEY = 'invoice_files_v1';
+const INV_FILE_MAX = 5 * 1024 * 1024; // 单文件上限 5MB
+let invFileData = {};        // { [id]: dataUrl }
+let invFileViewList = [];    // 当前展示的文件对象，供"查看"按钮引用
+
+function loadInvFileData() {
+  try { invFileData = JSON.parse(localStorage.getItem(INV_FILES_KEY) || '{}'); }
+  catch (e) { invFileData = {}; }
+}
+function persistInvFileData() {
+  try { localStorage.setItem(INV_FILES_KEY, JSON.stringify(invFileData)); }
+  catch (e) { showToast('附件存储空间不足，无法保存文件内容', 'error'); }
+}
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('读取失败'));
+    reader.readAsDataURL(file);
+  });
+}
+function genFileId() {
+  return 'f' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+async function handleInvoiceFileUpload(fileList) {
+  const files = Array.prototype.slice.call(fileList || []);
+  if (files.length === 0) return;
+  let added = 0;
+  for (const file of files) {
+    if (file.size > INV_FILE_MAX) {
+      showToast(`文件「${file.name}」超过 5MB，已跳过`, 'error');
+      continue;
+    }
+    let data;
+    try { data = await readFileAsDataUrl(file); }
+    catch (e) { showToast(`文件「${file.name}」读取失败`, 'error'); continue; }
+    const id = genFileId();
+    invTempFiles.push({ id, name: file.name, type: file.type, size: file.size });
+    invFileData[id] = data;
+    added++;
+  }
+  if (added > 0) {
+    renderInvUploadZone();
+    persistInvFileData();
+    saveInvoiceDraft();
+    showToast(`已添加 ${added} 个附件`, 'success');
   }
 }
-
-function simulateFileUpload(invId) {
-  const demoFiles = ['合同附件.pdf', '结算资料.docx', '其他证明材料.jpg', '发票底单扫描件.pdf'];
-  const randomFile = demoFiles[Math.floor(Math.random() * demoFiles.length)];
-
-  const editId = document.getElementById('inv-edit-id').value;
-  if (editId) {
-    const inv = store.invoices.find(i => i.id === editId);
-    if (inv && !inv.files.includes(randomFile)) {
-      inv.files.push(randomFile);
-      document.getElementById('inv-uploaded-files').innerHTML = inv.files.map(f =>
-        `<span class="upload-file-tag">${f}<button onclick="removeUploadedFile('${inv.id}','${f}')">&times;</button></span>`
-      ).join('');
-      document.getElementById('inv-files-display').style.display = 'block';
-      // 推广费发票：上传附件后订单状态变更为"已完成"
-      if (inv.type === '推广费') inv.orderStatus = '已完成';
-      saveStore();
-      renderInvoiceTable();
-      refreshDashboard();
-      showToast('文件上传成功（模拟）', 'success');
-    }
-  } else {
-    // 新增发票：附件暂存到 invTempFiles，保存时写入
-    if (!invTempFiles.includes(randomFile)) {
-      invTempFiles.push(randomFile);
-      document.getElementById('inv-uploaded-files').innerHTML = invTempFiles.map(f =>
-        `<span class="upload-file-tag">${f}<button onclick="removeTempUploadedFile('${f}')">&times;</button></span>`
-      ).join('');
-      document.getElementById('inv-files-display').style.display = 'block';
-      saveInvoiceDraft();
-      showToast('文件上传成功（模拟）', 'success');
-    }
+function handleInvoiceFileDrop(event) {
+  if (event.dataTransfer && event.dataTransfer.files) {
+    handleInvoiceFileUpload(event.dataTransfer.files);
   }
 }
-
-function removeTempUploadedFile(fileName) {
-  invTempFiles = invTempFiles.filter(f => f !== fileName);
-  document.getElementById('inv-uploaded-files').innerHTML = invTempFiles.map(f =>
-    `<span class="upload-file-tag">${f}<button onclick="removeTempUploadedFile('${f}')">&times;</button></span>`
+// 将 base64 data URL 转换为 Blob（用于在新窗口预览/下载，规避浏览器对 data: URL 新窗口导航的拦截）
+function dataUrlToBlob(dataUrl) {
+  const idx = dataUrl.indexOf(',');
+  const meta = dataUrl.slice(0, idx);
+  const b64 = dataUrl.slice(idx + 1);
+  const mime = (meta.match(/data:([^;]+)/) || [,'application/octet-stream'])[1] || 'application/octet-stream';
+  const bin = atob(b64);
+  const len = bin.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+function viewInvFile(i) {
+  const f = invFileViewList[i];
+  if (!f) return;
+  if (!f.id || !invFileData[f.id]) {
+    showToast('该文件内容不可用（旧数据或未保存内容丢失）', 'error');
+    return;
+  }
+  try {
+    const blob = dataUrlToBlob(invFileData[f.id]);
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank', 'noopener');
+    if (!w) {
+      // 浏览器拦截了弹窗：退化为当前页触发下载
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = f.name || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast('浏览器拦截了新窗口，已改为下载该文件', 'warning');
+    }
+    // 新窗口加载完成后释放对象 URL（延迟回收，避免影响预览）
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 60000);
+  } catch (e) {
+    showToast('文件预览失败：' + (e && e.message ? e.message : '解析错误'), 'error');
+  }
+}
+// 新增发票：渲染暂存附件标签（含查看 / 移除）
+function renderInvUploadZone() {
+  const container = document.getElementById('inv-uploaded-files');
+  if (!container) return;
+  invFileViewList = invTempFiles.slice();
+  container.innerHTML = invTempFiles.map((f, i) =>
+    `<span class="upload-file-tag">${escapeHtml(f.name)}<button type="button" class="file-view" title="查看" onclick="viewInvFile(${i})">查看</button><button type="button" class="file-remove" title="移除" onclick="removeTempUploadedFileAt(${i})">&times;</button></span>`
   ).join('');
-  if (invTempFiles.length === 0) document.getElementById('inv-files-display').style.display = 'none';
+  document.getElementById('inv-files-display').style.display = invTempFiles.length > 0 ? 'block' : 'none';
+}
+function removeTempUploadedFileAt(i) {
+  const f = invTempFiles[i];
+  if (!f) return;
+  if (f.id && invFileData[f.id]) { delete invFileData[f.id]; persistInvFileData(); }
+  invTempFiles.splice(i, 1);
+  renderInvUploadZone();
   saveInvoiceDraft();
+}
+// 编辑发票：渲染已保存附件标签（含查看 / 移除）
+function renderInvSavedFiles(inv) {
+  const container = document.getElementById('inv-uploaded-files');
+  if (!container) return;
+  invFileViewList = (inv.files || []).slice();
+  container.innerHTML = (inv.files || []).map((f, i) => {
+    const nm = typeof f === 'string' ? f : f.name;
+    return `<span class="upload-file-tag">${escapeHtml(nm)}<button type="button" class="file-view" title="查看" onclick="viewInvFile(${i})">查看</button><button type="button" class="file-remove" title="移除" onclick="removeUploadedFileAt('${inv.id}',${i})">&times;</button></span>`;
+  }).join('');
+  document.getElementById('inv-files-display').style.display = (inv.files && inv.files.length > 0) ? 'block' : 'none';
+}
+function removeUploadedFileAt(invId, i) {
+  const inv = store.invoices.find(x => x.id === invId);
+  if (!inv) return;
+  const f = inv.files[i];
+  if (f && typeof f !== 'string' && f.id && invFileData[f.id]) {
+    delete invFileData[f.id]; persistInvFileData();
+  }
+  inv.files.splice(i, 1);
+  const hasOrders = store.orders.some(o => o.invoiceId === invId);
+  if (inv.files.length === 0 && !hasOrders) inv.orderStatus = '待完成';
+  saveStore();
+  renderInvSavedFiles(inv);
+  renderInvoiceTable();
+  refreshDashboard();
+}
+// 发票详情：附件展示为可查看的标签
+function invFilesChipsHtml(files) {
+  const arr = (files || []).map(f => (typeof f === 'string' ? { name: f, legacy: true } : f));
+  invFileViewList = arr;
+  return arr.map((f, i) => {
+    if (f.legacy || !f.id || !invFileData[f.id]) {
+      return `<span class="product-chip">${escapeHtml(f.name)}</span>`;
+    }
+    return `<span class="product-chip">${escapeHtml(f.name)} <a href="javascript:void(0)" onclick="viewInvFile(${i})" style="color:var(--brand-600);text-decoration:underline;">查看</a></span>`;
+  }).join('');
 }
 
 /* ============================================================
@@ -3718,6 +3908,7 @@ function renderProductTable() {
           <td><strong>${p.name}</strong></td>
           <td>¥${p.price.toLocaleString('zh-CN',{minimumFractionDigits:2})}</td>
           <td>${p.weight}</td>
+          <td>${p.stock != null ? p.stock : '<span style="color:var(--gray-400);">无限</span>'}</td>
           <td>${p.createdAt || '—'}</td>
           <td>
             <div class="actions">
@@ -3748,6 +3939,7 @@ function openProductModal(prodId) {
       document.getElementById('prod-name').value = prod.name;
       document.getElementById('prod-price').value = prod.price;
       document.getElementById('prod-weight').value = prod.weight;
+      document.getElementById('prod-stock').value = (prod.stock != null && prod.stock > 0) ? prod.stock : '';
     }
   }
 
@@ -3764,6 +3956,7 @@ function saveProduct(e) {
     name: document.getElementById('prod-name').value.trim(),
     price: parseFloat(document.getElementById('prod-price').value) || 0,
     weight: parseFloat(document.getElementById('prod-weight').value) || 1,
+    stock: (() => { const v = parseFloat(document.getElementById('prod-stock').value); return (!isNaN(v) && v > 0) ? Math.floor(v) : null; })(),
     createdAt: editId ? (store.products.find(p => p.id === editId)?.createdAt || new Date().toISOString().slice(0,10)) : new Date().toISOString().slice(0,10),
   };
 
@@ -4073,7 +4266,8 @@ function renderMchtPreview() {
 let prodPreviewData = [];
 
 function downloadProductTemplate() {
-  const csvContent = '\uFEFF产品类型,产品名称,售价（元）,权重\n会员服务,基础会员,100,6.5\n咨询服务,车辆评估咨询,300,5.0';
+  // 库存为第 5 列，不必填；留空表示无限库存，填写正整数表示实际库存数量
+  const csvContent = '\uFEFF产品类型,产品名称,售价（元）,权重,库存\n会员服务,基础会员,100,6.5,\n咨询服务,车辆评估咨询,300,5.0,50';
   downloadCSV(csvContent, '产品批量导入模板.csv');
 }
 
@@ -4086,13 +4280,30 @@ function openProductImportModal() {
   openModal('product-import');
 }
 
+// 产品导入专用映射：含可选"库存"列（第5列）。
+// 库存未填或非正数 → null（表示无限库存）；否则取正整数作为实际库存数量
+function productImportMapRow(cols) {
+  const type = String(cols[0] || '').trim();
+  const name = String(cols[1] || '').trim();
+  const price = parseFloat(cols[2]);
+  const weight = parseFloat(cols[3]);
+  if (!type || !name || isNaN(price) || isNaN(weight)) return null;
+  let stock = null;
+  const raw = cols[4];
+  if (raw !== undefined && String(raw).trim() !== '') {
+    const n = parseFloat(String(raw).trim());
+    if (!isNaN(n) && n > 0) stock = Math.floor(n);
+  }
+  return { type, name, price, weight, stock };
+}
+
 function handleProductCSV(event) {
   const file = event.target.files[0];
   if (!file) return;
   parseImportFile(file, (rows) => {
     prodPreviewData = rows;
     renderProdPreview();
-  });
+  }, productImportMapRow);
 }
 
 function renderProdPreview() {
@@ -4113,7 +4324,7 @@ function renderProdPreview() {
 
   wrap.innerHTML = `
     <table class="import-preview-table">
-      <thead><tr><th>#</th><th>产品类型</th><th>产品名称</th><th>售价（元）</th><th>权重</th></tr></thead>
+      <thead><tr><th>#</th><th>产品类型</th><th>产品名称</th><th>售价（元）</th><th>权重</th><th>库存</th></tr></thead>
       <tbody>
         ${prodPreviewData.map((p, i) => `
           <tr>
@@ -4122,6 +4333,7 @@ function renderProdPreview() {
             <td>${p.name}</td>
             <td>¥${p.price}</td>
             <td>${p.weight}</td>
+            <td>${p.stock != null ? p.stock : '无限'}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -4135,44 +4347,60 @@ function confirmProductImport() {
     return;
   }
 
-  // === Deduplication: within import file ===
-  const seen = new Set();
-  const uniqueData = [];
-  const internalDups = [];
-  for (const p of prodPreviewData) {
-    const key = `${p.type}|${p.name}`;
-    if (seen.has(key)) {
-      internalDups.push(`${p.type} — ${p.name}`);
-      continue;
-    }
-    seen.add(key);
-    uniqueData.push(p);
-  }
+  // 库存合并规则（v3.1）：
+  //  - 无限(null) + 实际库存 = 实际库存
+  //  - 无限 + 无限 = 无限
+  //  - 实际库存 + 实际库存 = 叠加（相加）
+  const combineStock = (a, b) => {
+    const av = (a != null && a > 0) ? a : null;
+    const bv = (b != null && b > 0) ? b : null;
+    if (av == null && bv == null) return null;
+    if (av == null) return bv;
+    if (bv == null) return av;
+    return av + bv;
+  };
 
-  // === Deduplication: against existing store.products ===
-  const existingKeys = new Set(store.products.map(p => `${p.type}|${p.name}`));
-  const toImport = [];
-  const existingDups = [];
-  for (const p of uniqueData) {
-    const key = `${p.type}|${p.name}`;
-    if (existingKeys.has(key)) {
-      existingDups.push(`${p.type} — ${p.name}`);
-      continue;
+  // === 第一步：文件内按「产品名称 + 售价」合并，库存叠加（不再跳过重复行）===
+  const fileMap = new Map();
+  for (const p of prodPreviewData) {
+    const key = `${p.name}|${p.price}`;
+    if (fileMap.has(key)) {
+      const base = fileMap.get(key);
+      base.stock = combineStock(base.stock, p.stock); // 库存叠加（实际+实际=和；无限+实际=实际；无限+无限=无限）
+      // 类型 / 权重以首次出现为准，库存按上述规则合并
+    } else {
+      fileMap.set(key, {
+        type: p.type, name: p.name, price: p.price, weight: p.weight,
+        stock: (p.stock != null && p.stock > 0) ? p.stock : null,
+      });
     }
-    toImport.push(p);
   }
+  const mergedRows = Array.from(fileMap.values());
+
+  // === 第二步：与现有 store.products 合并（按 产品名称 + 售价）===
+  // 已存在 → 库存叠加更新已有产品；不存在 → 新增
+  const existingByKey = new Map();
+  for (const ep of store.products) existingByKey.set(`${ep.name}|${ep.price}`, ep);
 
   const now = new Date().toISOString().slice(0,10);
-  let added = 0;
-  for (const p of toImport) {
-    store.products.push({
-      id: 'p' + Date.now() + '_' + (added++),
-      type: p.type,
-      name: p.name,
-      price: p.price,
-      weight: p.weight,
-      createdAt: now,
-    });
+  let added = 0, updated = 0;
+  for (const r of mergedRows) {
+    const key = `${r.name}|${r.price}`;
+    const exist = existingByKey.get(key);
+    if (exist) {
+      exist.stock = combineStock(exist.stock, r.stock); // 库存叠加到已有产品
+      updated++;
+    } else {
+      store.products.push({
+        id: 'p' + Date.now() + '_' + (added++),
+        type: r.type,
+        name: r.name,
+        price: r.price,
+        weight: r.weight,
+        stock: (r.stock != null && r.stock > 0) ? r.stock : null, // null = 无限库存
+        createdAt: now,
+      });
+    }
   }
 
   saveStore();
@@ -4182,15 +4410,11 @@ function confirmProductImport() {
 
   // Build feedback message
   const msgs = [];
-  if (added > 0) msgs.push(`成功导入 ${added} 条产品记录`);
-  if (existingDups.length > 0) msgs.push(`已存在，跳过 ${existingDups.length} 条`);
-  if (internalDups.length > 0) msgs.push(`文件内重复，跳过 ${internalDups.length} 条`);
+  if (added > 0) msgs.push(`成功新增/导入 ${added} 条产品记录`);
+  if (updated > 0) msgs.push(`库存叠加更新 ${updated} 条（同名同价产品库存已累加）`);
+  if (msgs.length === 0) msgs.push('没有可导入的数据');
 
-  if (added === 0) {
-    showToast('所有数据均重复，未导入任何记录', 'error');
-  } else {
-    showToast(msgs.join('；'), msgs.length > 1 ? 'warning' : 'success');
-  }
+  showToast(msgs.join('；'), (added > 0 || updated > 0) ? 'success' : 'warning');
 }
 
 /* ============================================================
@@ -4604,6 +4828,7 @@ function renderDashboardInvoices() {
   });
 
   // Initial render
+  loadInvFileData(); // 加载已保存的发票附件内容（独立键，避免撑爆主数据）
   setupCSVDropZones();
   applyDefaultInvoiceDateRange(); // 发票筛选默认近一个月
   refreshDashboard();
