@@ -4818,10 +4818,10 @@ function renderDashboardInvoices() {
     }
   });
 
-  // Close modals on overlay click
+  // Close modals on overlay click（新增发票弹窗 modal-invoice 除外：避免误点外部区域关闭，仅可通过右上角×或取消关闭）
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
+      if (e.target === overlay && overlay.id !== 'modal-invoice') {
         overlay.classList.remove('active');
       }
     });
