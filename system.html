@@ -1639,7 +1639,7 @@ tbody tr:hover { background: var(--gray-50); }
             <table>
               <thead>
                 <tr>
-                  <th>发票单号</th><th>开票主体</th><th>客户名称</th><th>发票类型</th><th>发票金额</th><th>折扣价</th><th>订单金额</th><th>发票项目</th><th>开票状态</th><th>是否红冲</th><th>订单状态</th><th>开票时间</th><th>操作</th>
+                  <th>发票单号</th><th>开票主体</th><th>客户名称</th><th>发票类型</th><th>发票金额</th><th>折扣价</th><th>订单金额</th><th>发票项目</th><th>开票状态</th><th>订单状态</th><th>开票时间</th><th>操作</th>
                 </tr>
               </thead>
               <tbody id="invoice-table-body"></tbody>
@@ -1904,14 +1904,6 @@ tbody tr:hover { background: var(--gray-50); }
             <option value="已完成">已完成</option>
             <option value="已作废">已作废</option>
           </select>
-        </div>
-        <div class="form-group">
-          <label>是否红冲 *</label>
-          <select id="inv-redact" required onchange="onRedactStatusChange()">
-            <option value="未红冲">未红冲</option>
-            <option value="已红冲">已红冲</option>
-          </select>
-          <span class="form-hint">若选择"已红冲"，开票状态将自动变更为"已作废"</span>
         </div>
         <div class="form-group">
           <label>开票时间 *</label>
@@ -2308,7 +2300,7 @@ function addDays(dateStr, days) {
    - 每条清单明细按"采购数量"生成对应条数的订单
    - 字段映射：服务类型→产品类型、服务项目→产品名称、单价→订单金额
    - 结算时间：单选日期（订单结算时间固定为该日）；服务时间：在用户填写的区间内随机生成
-   - 发票状态已作废/已红冲 → 订单已取消; 否则→已结算)
+   - 开票状态为"已作废" → 订单已取消; 否则→已结算)
    ============================================================ */
 function randomServiceDate(settlementDate) {
   const settle = new Date(settlementDate + 'T00:00:00');
@@ -2365,8 +2357,8 @@ function generateOrdersFromTemplate(invoice) {
   // 发票级"订单状态"（发票列表中的"订单状态"列）：默认待完成，成功生成订单后置为已完成
   invoice.orderStatus = '待完成';
 
-  // 红冲/作废 → 关联订单已取消；否则 → 已结算（订单实际生成即视为已结算）
-  const redacted = (invoice.redactStatus === '已红冲' || invoice.invoiceStatus === '已作废');
+  // 开票状态为"已作废" → 关联订单已取消；否则 → 已结算（订单实际生成即视为已结算）
+  const redacted = (invoice.invoiceStatus === '已作废');
 
   // Date ranges from invoice (结算时间改为单选日期：settleDate 同时作为起止；兼容旧数据的 settleStart)
   const settleStart = invoice.settleDate || invoice.settleStart || invoice.date;
@@ -2566,7 +2558,7 @@ function updateOrderStatusForInvoice(invoiceId) {
   const inv = store.invoices.find(i => i.id === invoiceId);
   if (!inv) return;
   let newStatus = '已结算';
-  if (inv.redactStatus === '已红冲' || inv.invoiceStatus === '已作废') newStatus = '已取消';
+  if (inv.invoiceStatus === '已作废') newStatus = '已取消';
   else if (inv.orderStatus === '待完成') newStatus = '待完成';
   store.orders.forEach(o => {
     if (o.invoiceId === invoiceId) o.status = newStatus;
@@ -2635,7 +2627,6 @@ function saveInvoiceDraft() {
     discount: document.getElementById('inv-discount').value,
     project: document.getElementById('inv-project').value,
     status: document.getElementById('inv-status').value,
-    redact: document.getElementById('inv-redact').value,
     date: document.getElementById('inv-date').value,
     settleDate: document.getElementById('inv-settle-date').value,
     serviceStart: document.getElementById('inv-service-start').value,
@@ -2669,7 +2660,6 @@ function applyInvoiceDraft(draft) {
   document.getElementById('inv-discount').value = draft.discount || '';
   document.getElementById('inv-project').value = draft.project || '';
   document.getElementById('inv-status').value = draft.status || '已完成';
-  document.getElementById('inv-redact').value = draft.redact || '未红冲';
   document.getElementById('inv-date').value = draft.date || '';
   document.getElementById('inv-settle-date').value = draft.settleDate || '';
   document.getElementById('inv-service-start').value = draft.serviceStart || '';
@@ -2750,12 +2740,6 @@ function getInvoiceStatusBadge(status) {
   return status === '已作废'
     ? '<span class="badge badge-red">已作废</span>'
     : '<span class="badge badge-green">已完成</span>';
-}
-
-function getRedactBadge(status) {
-  return status === '已红冲'
-    ? '<span class="badge badge-red">已红冲</span>'
-    : '<span class="badge badge-gray">未红冲</span>';
 }
 
 function getOrderStatusBadge(status) {
@@ -2939,7 +2923,6 @@ function renderInvoiceTable() {
     empty.style.display = 'none';
     tbody.innerHTML = pagedList.map(inv => {
       const ivStatus = inv.invoiceStatus || '已完成';
-      const rdStatus = inv.redactStatus || '未红冲';
       const discount = inv.discountPrice || 0;
       const orderAmt = inv.orderAmount || 0;
       return `
@@ -2953,7 +2936,6 @@ function renderInvoiceTable() {
         <td>${orderAmt > 0 ? '<strong style="color:var(--brand-600);">¥' + orderAmt.toLocaleString('zh-CN',{minimumFractionDigits:2}) + '</strong>' : '—'}</td>
         <td>${getInvoiceFeeTypeBadge(inv.type)} ${inv.project}</td>
         <td>${getInvoiceStatusBadge(ivStatus)}</td>
-        <td>${getRedactBadge(rdStatus)}</td>
         <td>${getOrderStatusBadge(inv.orderStatus || '待完成')}</td>
         <td>${inv.date || '<span style="color:var(--amber-600);font-weight:600;">待补全</span>'}</td>
         <td>
@@ -3006,7 +2988,6 @@ function openInvoiceModal(invId) {
       document.getElementById('inv-discount').value = inv.discountPrice || '';
       document.getElementById('inv-project').value = inv.project;
       document.getElementById('inv-status').value = inv.invoiceStatus || '已完成';
-      document.getElementById('inv-redact').value = inv.redactStatus || '未红冲';
       document.getElementById('inv-date').value = inv.date;
       calcOrderAmount();
 
@@ -3041,7 +3022,6 @@ function openInvoiceModal(invId) {
       document.getElementById('inv-no').value = 'FP-2026-' + String(store.nextIds.invoice).padStart(4,'0');
       document.getElementById('inv-date').value = fmtLocalDate(new Date());
       document.getElementById('inv-status').value = '已完成';
-      document.getElementById('inv-redact').value = '未红冲';
       document.getElementById('inv-uploaded-files').innerHTML = '';
       document.getElementById('inv-files-display').style.display = 'none';
       document.getElementById('inv-template-preview').style.display = 'none';
@@ -3076,13 +3056,6 @@ function toggleInvoiceProjectFields() {
     document.getElementById('inv-files-display').style.display = 'block';
   }
   if (isService) calcOrderAmount();
-}
-
-function onRedactStatusChange() {
-  const redactVal = document.getElementById('inv-redact').value;
-  if (redactVal === '已红冲') {
-    document.getElementById('inv-status').value = '已作废';
-  }
 }
 
 function calcOrderAmount() {
@@ -3360,7 +3333,6 @@ function saveInvoice(e) {
     serviceStart: internalType === '服务费' ? serviceStart : '',
     serviceEnd: internalType === '服务费' ? serviceEnd : '',
     invoiceStatus: document.getElementById('inv-status').value,
-    redactStatus: document.getElementById('inv-redact').value,
     // 订单状态：服务费发票有清单且容差达标→已完成；推广费发票有上传附件→已完成；其余为待完成
     orderStatus: (internalType === '服务费' && invTemplateData.length > 0 && listToleranceOk) ? '已完成'
       : (internalType === '推广费' && allFiles.length > 0) ? '已完成'
@@ -3391,26 +3363,6 @@ function saveInvoice(e) {
 
   refreshDashboard();
   showToast(editId ? '发票已更新' : '发票已创建', 'success');
-}
-
-function redactInvoice(id) {
-  const inv = store.invoices.find(i => i.id === id);
-  if (!inv || inv.type !== '服务费') return;
-  if (inv.redactStatus === '已红冲') {
-    showToast('该发票已是红冲状态', 'error');
-    return;
-  }
-  if (!confirm(`确定要将发票 ${id} 红冲吗？\n\n红冲后开票状态将变更为"已作废"，关联的所有订单明细将变更为"已取消"状态。`)) return;
-
-  inv.redactStatus = '已红冲';
-  inv.invoiceStatus = '已作废';
-  updateOrderStatusForInvoice(id);
-  saveStore();
-  renderInvoiceTable();
-  renderOrderTable();
-
-  refreshDashboard();
-  showToast(`发票 ${id} 已红冲，开票状态已变更为"已作废"，关联订单已变更为"已取消"`, 'success');
 }
 
 function editInvoice(id) { openInvoiceModal(id); }
@@ -3495,7 +3447,6 @@ function viewInvoiceDetail(id) {
     <div class="detail-item"><span class="label">折扣价</span><span class="value">${inv.discountPrice || '—'}</span></div>
     <div class="detail-item"><span class="label">订单金额</span><span class="value" style="font-weight:700;color:var(--brand-600);">${inv.orderAmount ? '¥' + inv.orderAmount.toLocaleString('zh-CN',{minimumFractionDigits:2}) : '—'}</span></div>
     <div class="detail-item"><span class="label">开票状态</span><span class="value">${getInvoiceStatusBadge(inv.invoiceStatus || '已完成')}</span></div>
-    <div class="detail-item"><span class="label">是否红冲</span><span class="value">${getRedactBadge(inv.redactStatus || '未红冲')}</span></div>
     <div class="detail-item"><span class="label">订单状态</span><span class="value">${getOrderStatusBadge(inv.orderStatus || '待完成')}</span></div>
     <div class="detail-item"><span class="label">开票时间</span><span class="value">${inv.date}</span></div>
     <div class="detail-item"><span class="label">匹配商户</span><span class="value">${inv.type === '服务费' ? (store.merchants.find(m => m.name === inv.customer)?.name || '未匹配') : '—'}</span></div>
@@ -3788,7 +3739,7 @@ function exportInvoiceXLSX() {
   }
 
   // 导出字段顺序与发票列表页面表头一致
-  const headers = ['发票单号', '开票主体', '客户名称', '发票类型', '发票金额', '折扣价', '订单金额', '发票项目', '开票状态', '是否红冲', '开票时间'];
+  const headers = ['发票单号', '开票主体', '客户名称', '发票类型', '发票金额', '折扣价', '订单金额', '发票项目', '开票状态', '开票时间'];
   const rows = [headers];
   for (const inv of list) {
     rows.push([
@@ -3801,7 +3752,6 @@ function exportInvoiceXLSX() {
       inv.orderAmount || 0,
       inv.type || '',
       inv.invoiceStatus || '已完成',
-      inv.redactStatus || '未红冲',
       inv.date || ''
     ]);
   }
@@ -4668,7 +4618,6 @@ function confirmInvoiceImport() {
           templateData: [],                           // 导入不含清单，重置
           settleDate: '', serviceStart: '', serviceEnd: '',
           invoiceStatus: '已完成',
-          redactStatus: '未红冲',
           orderStatus: '待完成'                    // 批量导入时尚未上传清单，固定为待完成
         };
         // 旧清单生成的关联订单不再匹配，需重置
@@ -4694,7 +4643,6 @@ function confirmInvoiceImport() {
       templateData: [],              // 待编辑上传清单
       settleDate: '', serviceStart: '', serviceEnd: '',
       invoiceStatus: '已完成',
-      redactStatus: '未红冲',
       orderStatus: '待完成'                  // 批量导入时尚未上传清单，固定为待完成
     });
     added++;
